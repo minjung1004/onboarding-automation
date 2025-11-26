@@ -34,7 +34,7 @@ pipeline {
                         elif echo "${CHANGED_FILES}" | grep -q "employees/offboarding/"; then
                              echo"${CHANGED_FILES}" | grep "employees/offboarding/" | head -1
                         fi
-                        '''
+                        ''',
                         returnStdout: true
                     ).trim()
 
