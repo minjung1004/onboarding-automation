@@ -9,4 +9,3 @@ docker run -d \
   -e LDAP_READONLY_USER="false" \
   -e LDAP_TLS="false" \
   osixia/openldap:1.5.0
-

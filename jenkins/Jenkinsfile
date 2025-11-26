@@ -16,7 +16,7 @@ pipeline {
                 script {
                     // detect changed files
                     def changes = sh(
-                        script: 'git diff --name-only HEAD~1'
+                        script: 'git diff --name-only HEAD~1',
                         returnStdout: true
                     ).trim()
                     env.CHANGED_FILES = changes
