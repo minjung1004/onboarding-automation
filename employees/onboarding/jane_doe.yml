@@ -1,0 +1,16 @@
+# employees/onboarding/jane_doe.yml
+employee: 
+   first_name: Jane
+   last_name: Doe
+   email: jane.doe@company.com
+   department: Engineering
+   role: Software Engineer
+   manager: manager1@company.com
+   start_date: 2025-10-22
+   tools:
+      - GitHub
+      - Slack
+      - Confluence
+   groups:
+      - developers
+      - engineering-team

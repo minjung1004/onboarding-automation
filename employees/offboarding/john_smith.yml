@@ -1,0 +1,13 @@
+# employees/offboarding/john_smith.yml
+employee:
+   first_name: John
+   last_name: Smith
+   email: john.smith@company.com
+   department: Business
+   role: Internal Auditor
+   manager: manager2@company.com
+   end_date: 2025-10-22
+   groups:
+      - business-team
+      - auditor
+   reason: resignation

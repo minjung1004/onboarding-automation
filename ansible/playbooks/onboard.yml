@@ -1,0 +1,143 @@
+# ansible/playbooks/onboard.yml
+---
+- name: Employee Onboarding Automation
+  hosts: localhost
+  gather_facts: yes
+  vars_files:
+   - "{{ employee_file }}" 
+  
+  vars:
+   ldap_server: "ldap-server"
+   ldap_port: 389
+   ldap_bind_dn: "en=admin, dc=company, dc=com"
+   ldap_bind_password: "admin123"
+   ldap_base_dn: "dc=company, dc=com"
+
+  tasks:
+   - name: Display employee information
+     debug:
+       msg: "Onboarding {{ employee.first_name }} {{ employee.last_name }}: {{ employee.email }}"
+
+   - name: Validate employee data
+     shell: python3 /automation/scripts/validate_employee.py {{ employee_file }}
+     register: validation_result
+     failed_when: validation_result.rc != 0
+
+   - name: Generate UID number
+     set_fact:
+      uid_number: "{{ 5000 + (username | hash('sha1') | int(base=16) % 1000) }}"
+
+   - name: Create LDAP user account
+     community.general.ldap_entry:
+      server_uri: "ldap://{{ ldap_server }}: {{ ldap_port }}"
+      bind_dn: "{{ ldap_bind_dn }}"
+      bind_pw: "{{ ldap_bind_password }}"
+      dn: "uid={{ employee.first_name|lower }}.{{ employee.last_name|lower }}, ou=users, {{ ldap_base_dn }}"
+      objectClass:
+         - inetOrgPerson
+         - posixAccount
+      attributes:
+         cn: "{{ employee.first_name }} {{ employee.last_name }}"
+         sn: "{{ employee.last_name }}"
+         givenName: "{{ employee.first_name }}"
+         email: "{{ employee.email }}"
+         uid: "{{ employee.first_name|lower }}.{{ employee.last_name|lower }}"
+         uidNumber: "{{ uid_number }}"
+         gidNumber: "5000"
+         homeDirectory: "/home/{{ employee.first_name|lower }}.{{ employee.last_name|lower }}"
+         loginShell: "/bin/bash"
+         userPassword: "user123"
+      state: present
+     register: ldap_user_result
+
+   - name: Create LDAP groups if they don't exist
+     community.general.ldap_entry:
+      server_uri: "ldap://{{ ldap_server }}:{{ ldap_port }}"
+      bind_dn: "{{ ldap_base_dn }}"
+      bind_pw: "{{ ldap_bind_password }}"
+      dn: "cn={{ item }}, ou=groups, {{ ldap_base_dn }}"
+      objectClass:
+        - groupOfNames 
+      attributes:
+        cn: "{{ item }}"
+        member: "cn:admin, {{ ldap_base_dn }}"
+      state: present
+     loop: "{{ employee.groups }}"
+     ignore_errors: yes
+
+   - name: Add user to groups
+     community.general.ldap_attrs:
+      server_uri: "ldap://{{ ldap_server }}:{{ ldap_port }}"
+      bind_dn: "{{ ldap_bind_dn }}"
+      bind_pw: "{{ ldap_bind_password }}"
+      dn: "cn={{ item }}, ou=groups, {{ ldap_base_dn }}"
+      attributes:
+        member: "uid:{{ employee.first_name|lower }}.{{ employee.last_name|lower }}, ou=users, {{ ldap_base_dn}}"
+      state: present
+     loop: "{{ employee.groups }}"
+
+   - name: Create user home directory (simulated)
+     file:
+       path: "/tmp/home/{{ employee.first_name|lower }}.{{ employee.last_name|lower }}"
+       state: directory
+       mode: '0755'
+
+   - name: Create user profile script
+     copy:
+      content: |
+       #!/bin/bash
+       # user profile for {{ employee.first_name }} {{ employee.last_name }}
+       export USER="{{ employee.first_name|lower }}.{{ employee.last_name|lower }}"
+       export EMAIL="{{ employee.email }}"
+       export DEPARTMENT="{{ employee.department }}"
+       export ROLE="{{ employee.role }}"
+      dest: "/tmp/home/{{ employee.first_name|lower }}.{{ employee.last_name|lower }}.profile"
+      more: "0644"
+
+   - name: Generate welcome msg
+     copy:
+      content: |
+        Welcome to Company Inc. {{ employee.first_name|upper }}!
+
+        Your account has been created:
+        - Username: {{ employee.first_name|lower }}.{{ employee.last_name|lower }}
+        - Email {{ employee.email }}
+        - Department: {{ employee.department}}
+        - Role: {{ employee.role }}
+        - Manager: {{ employee.manager }}
+        - Start Date: {{ employee Start}}
+
+        You have been added to the following groups:
+        {% for group in employee.groups %}
+        - {{ group }}
+        {% endfor %}
+
+        Please change your password on first login.
+
+        If you have any questions, contact your manager or IT support.
+      dest: "/tmp/welcome_{{ employee.first_name|lower }}_{{ employee.last_name|lower }}.txt"
+  
+   - name: Send Webex notification
+     shell: |
+       python3 /automation/scripts/webex_notifier.py \
+         onboard \
+         "{{ employee.first_name }}" \
+         "{{ employee.last_name }}" \
+         "{{ employee.email }}" \
+         "{{ employee.department }}"
+     environment:
+       WEBEX_BOT_TOKEN: "{{ lookup('env', 'WEBEX_BOT_TOKEN') }}"
+       WEBEX_ROOM_ID: "{{ lookup('env', 'WEBEX_ROOM_ID') }}"
+     register: webex_result
+     when: lookup('env', 'WEBEX_BOT_TOKEN') != ''
+
+   - name: Display onboarding summary
+     debug:
+      msg:
+        - "[SUCCESS] Onboarding completed!"
+        - "User: {{ employee.first_name }} {{ employee.last_name }}"
+        - "Email: {{ employee.email }}"
+        - "LDAP Account: Created"
+        - "Groups: {{ employee.groups | join(', ') }}"
+        - "Home Directory: Created"
+        - "Webex Notification: {{ 'Sent' if webex_result is defined and webex_result.rc == 0 else 'Skipped' }}"

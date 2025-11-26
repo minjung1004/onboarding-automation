@@ -1,0 +1,107 @@
+# ansible/playbooks/offboard.yml
+---
+- name: Employee Onboarding Automation
+  hosts: localhost
+  gather_facts: yes
+  vars_files:
+   - "{{ employee_file }}" 
+  
+  vars:
+   ldap_server: "ldap-server"
+   ldap_port: 389
+   ldap_bind_dn: "en=admin, dc=company, dc=com"
+   ldap_bind_password: "admin123"
+   ldap_base_dn: "dc=company, dc=com"
+
+  tasks:
+   - name: Display employee information
+     debug:
+       msg: "Offboarding {{ employee.first_name }} {{ employee.last_name }}: {{ employee.email }}"
+
+   - name: Validate employee data
+     shell: python3 /automation/scripts/validate_employee.py {{ employee_file }}
+     register: validation_result
+     failed_when: validation_result.rc != 0
+
+   - name: Remove user from all groups
+     community.general.ldap_attrs:
+       server_uri: "ldap://{{ ldap_server }}:{{ ldap_port }}"
+       bind_dn: "{{ ldap_bind_dn }}"
+       bind_pw: "{{ ldap_bind_password }}"
+       dn: "cn={{ item }}, ou=groups, {{ ldap_base_dn }}"
+       attributes:
+         member: "uid={{ employee.first_name|lower }}.{{ employee.last_name|lower }}, ou=users,{{ ldap_base_dn }}"
+       state: absent
+     loop: "{{ employee.groups }}"
+     ignore_errors: yes
+
+   - name: Disable LDAP user account (change password to random)
+     community.general.ldap_passwd:
+       server_uri: "ldap://{{ ldap_server }}:{{ ldap_port }}"
+       bind_dn: "{{ ldap_bind_dn }}"
+       bind_pw: "{{ ldap_bind_password }}"
+       dn: "uid={{ employee.first_name|lower }}.{{ employee.last_name|lower }},ou=users,{{ ldap_base_dn }}"
+       passwd: "{{ lookup('password', '/dev/null length=32 chars=ascii_letters,digits') }}"
+     register: disable_result
+
+   - name: Archive user home directory
+     archive:
+       path: "/tmp/home/{{ employee.first_name|lower }}.{{ employee.last_name|lower }}"
+       dest: "/tmp/archives/{{ employee.first_name|lower }}_{{ employee.last_name|lower}}_{{ ansible_data_time.date }}.tar.gz"
+       format: gz
+     when: "'home' in ansible_facts and ansible_facts.home is defined"
+     ignore_errors: yes
+
+   - name: Remove user home directory
+     file:
+       path: "/tmp/home/{{ employee.first_name|lower }}.{{ employee.last_name|lower }}"
+       state: absent
+     ignore_errors: yes
+
+   - name: Generate offboarding report
+     copy:
+       content: |
+         Offboarding Report 
+         ==================
+         Employee: {{ employee.first_name }} {{ employee.last_name }}
+         Email: {{ employee.email }}
+         Department: {{ employee.department }}
+         Last Day: {{ employee.end_date }}
+         Offboarding Date: {{ ansible_data_time.iso8601 }}
+
+         Actions Taken:
+           - LDAP account disabled
+           - Removed from groups: {{ employee.groups | join(', ') }}
+           - Home directory archieved
+           - Access revoked
+
+         Next Steps:
+           - Collect company equipment
+           - Conduct exit interview
+           - Process final payroll
+       dest: "/tmp/offboarding_report_{{ employee.first_name|lower }}_{{ employee.last_name|lower }}.txt"
+   
+   - name: Send Webex offboarding notification
+     shell: |
+       python3 /automation/scripts/webex_notifier.py \
+         offboard \
+         "{{ employee.first_name }}" \
+         "{{ employee.last_name }}" \
+         "{{ employee.email }}" \
+         "{{ employee.department }}"
+     environment:
+       WEBEX_BOT_TOKEN: "{{ lookup('env', 'WEBEX_BOT_TOKEN') }}"
+       WEBEX_ROOM_ID: "{{ lookup('env', 'WEBEX_ROOM_ID') }}"
+     register: webex_result
+     when: lookup('env', 'WEBEX_BOT_TOKEN') != ''
+
+   - name: Display offboarding summary
+     debug:
+       msg:
+         - "[SUCCESS] Offboarding completed!"
+         - "User: {{ employee.first_name }} {{ employee.last_name }}"
+         - "Email: {{ employee.email }}"
+         - "LDAP Account: Disabled"
+         - "Groups: Removed"
+         - "Data: Archieved"
+         - "Webex Notification: {{ 'Sent' if webex_result is defined and webex_result.rc == 0 else 'Skipped' }}"

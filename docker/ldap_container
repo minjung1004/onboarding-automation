@@ -1,0 +1,13 @@
+docker run -d \
+  --name ldap-server \
+  --hostname ldap.company.com \
+  -p 389:389 \
+  -p 636:636 \
+  -e LDAP_ORGANISATION="Company Inc" \
+  -e LDAP_DOMAIN="company.com" \
+  -e LDAP_ADMIN_PASSWORD="admin123" \
+  -e LDAP_CONFIG_PASSWORD="config123" \
+  -e LDAP_READONLY_USER="false" \
+  -e LDAP_TLS="false" \
+  osixia/openldap:1.5.0
+

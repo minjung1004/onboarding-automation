@@ -1,0 +1,150 @@
+/// jenkins/Jenkinsfile
+
+pipeline {
+    agent any
+
+    environment {
+        WEBEX_BOT_TOKEN = credentials('webex-bot-token')
+        WEBEX_ROOM_ID = credentials('webex-room-id')
+        DOCKER_IMAGE = 'onboarding-automation:latest'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    // detect changed files
+                    def changes = sh(
+                        script: 'git diff --name-only HEAD~1'
+                        returnStdout: true
+                    ).trim()
+                    env.CHANGED_FILES = changes
+                    echo "Changed files: ${changes}"
+                }
+            }
+        }
+        stage('Validate Employee Data') {
+            steps {
+                script {
+                    def employeeFiles = sh(
+                        script: '''
+                        if echo "${CHANGED_FILES}" | grep -q "employees/onboarding/"; then
+                             echo "${CHANGED_FILES}" | grep "employees/onboarding/" | head -1
+                        elif echo "${CHANGED_FILES}" | grep -q "employees/offboarding/"; then
+                             echo"${CHANGED_FILES}" | grep "employees/offboarding/" | head -1
+                        fi
+                        '''
+                        returnStdout: true
+                    ).trim()
+
+                    if (employeeFiles) {
+                        env.EMPLOYEE_FILE = employeeFiles
+                        echo "Processing: ${employeeFiles}"
+
+                        // Run Python validation
+                        sh "python3 scripts/validate_employee.py ${employeeFiles}"
+                    } else {
+                        echo "No employee files changed, skipping pipeline"
+                        currentBuild.result = 'NOT_BUILT'
+                        return
+                    }
+                }
+            }
+        }
+        stage('Build Docker Environment') {
+            steps {
+                script {
+                    sh '''
+                    docker build -t onboarding-automation:latest -f docker/Dockerfile .
+                    '''
+                }
+            }
+        }
+
+        stage('Start LDAP Server') {
+            steps {
+                script {
+                    // check if LDAP container exists
+                    def ldapExists = sh(
+                        script : 'docker ps -a --filter name=ldap-server --format "{{.Names}}',
+                        returnStdout: true
+                    ).trim()
+
+                    if (!ldapExists) {
+                        sh '''
+                        docker run -d \
+                          --name ldap-server \
+                          -p 389:389 \
+                          -e LDAP_ORGANISATION="Company Inc" \
+                          -e LDAP_DOMAIN="company.com" \
+                          -e LDAP_ADMIN_PADDWORD="admin123" \
+                          osixia/openldap:latest
+                        
+                        sleep 10 # Wait for LDAP to start
+                        '''
+                    } else {
+                        sh 'docker start ldap-server || true'
+                    }
+                }
+            }
+        }
+        stage('Run Automation') {
+            steps {
+                script {
+                    def action = env.EMPLOYEE_FILE.contains('new') ? 'onboard' : 'offboard'
+
+                    sh """
+                    docker run --rm \
+                      --network host \
+                      -v \$(pwd):/automation \
+                      -e WEBEX_BOT_TOKEN=${WEBEX_BOT_TOKEN} \
+                      -e WEBEX_ROOM_ID=${WEBEX_ROOM_ID} \
+                      -e ANSIBLE_HOST_KEY_CHECKING=False \
+                      ${DOCKER_IMAGE} \
+                      anisble-playbook \
+                        -i /automation/ansible/inventory/hosts.ini \
+                        /automation/ansible/playbooks/${action}.yml \
+                        -e employee_file=/automation/${EMPLOYEE_FILE} \
+                        -v
+                    """
+                }
+            }
+        }
+        stage('Run Tests') {
+            steps {
+                sh '''
+                python3 -m pytest tests/ -v --junitxml=test-results.xml
+                '''    
+            }
+        }
+        stage('Verfiy LDAP Connectivity') {
+            steps {
+                script {
+                    sh '''
+                    docker run --rm \
+                      --network host \
+                      ${DOCKER_IMAGE} \
+                      ldapsearch -x -H ldap://localhost:389 \
+                        -D "cn=admin, dc=comapny, dc=com" \
+                        -w admin123 \
+                        -b "dc=comapny, dc=com"
+                        "(objectClass=*)"
+                    '''
+                }
+            }
+        }
+    }
+    post {
+        always {
+            junit 'test-results.xml'
+            cleanWs()
+        }
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed!'
+        }
+    }
+}
