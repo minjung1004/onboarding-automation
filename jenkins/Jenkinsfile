@@ -2,9 +2,7 @@ pipeline {
     agent any
 
     environment {
-        WEBEX_BOT_TOKEN = credentials('OWE2MjNjYzktMmRiNS00MzI1LTlkZTItNjViZmNhMjFhM2JmZTAwNDIzZWEtYzk3_P0A1_13494cac-24b4-4f89-8247-193cc92a7636')
-        WEBEX_ROOM_ID   = credentials('Y2lzY29zcGFyazovL3VybjpURUFNOnVzLXdlc3QtMl9yL1JPT00vMjExMTI5OTAtY2IxNS0xMWYwLWFkMjctMmY0ZWY5NzZiMjIy')
-        DOCKER_IMAGE    = 'onboarding-automation:latest'
+        DOCKER_IMAGE = 'onboarding-automation:latest'
     }
 
     stages {
@@ -70,7 +68,6 @@ pipeline {
                                 -e LDAP_DOMAIN="company.com" \
                                 -e LDAP_ADMIN_PASSWORD="admin123" \
                                 osixia/openldap:latest
-
                             sleep 10
                         '''
                     } else {
@@ -82,37 +79,40 @@ pipeline {
 
         stage('Run Automation') {
             steps {
-                script {
-                    // Onboard = employee_file path contains "onboarding"
-                    def action = env.EMPLOYEE_FILE.contains('onboarding') ? 'onboard' : 'offboard'
+                withCredentials([
+                    string(credentialsId: 'OWE2MjNjYzktMmRiNS00MzI1LTlkZTItNjViZmNhMjFhM2JmZTAwNDIzZWEtYzk3_P0A1_13494cac-24b4-4f89-8247-193cc92a7636', variable: 'WEBEX_BOT_TOKEN'),
+                    string(credentialsId: 'Y2lzY29zcGFyazovL3VybjpURUFNOnVzLXdlc3QtMl9yL1JPT00vMjExMTI5OTAtY2IxNS0xMWYwLWFkMjctMmY0ZWY5NzZiMjIy', variable: 'WEBEX_ROOM_ID')
+                ]) {
+                    script {
+                        def action = env.EMPLOYEE_FILE.contains('onboarding') ? 'onboard' : 'offboard'
 
-                    sh """
-                        docker run --rm \
-                            --network host \
-                            -v \$(pwd):/automation \
-                            -e WEBEX_BOT_TOKEN=${WEBEX_BOT_TOKEN} \
-                            -e WEBEX_ROOM_ID=${WEBEX_ROOM_ID} \
-                            -e ANSIBLE_HOST_KEY_CHECKING=False \
-                            ${DOCKER_IMAGE} \
-                            ansible-playbook \
-                                -i /automation/ansible/inventory/hosts.ini \
-                                /automation/ansible/playbooks/${action}.yml \
-                                -e employee_file=/automation/${EMPLOYEE_FILE} \
-                                -v
-                    """
+                        sh """
+                            docker run --rm \
+                                --network host \
+                                -v \$(pwd):/automation \
+                                -e WEBEX_BOT_TOKEN=\${WEBEX_BOT_TOKEN} \
+                                -e WEBEX_ROOM_ID=\${WEBEX_ROOM_ID} \
+                                -e ANSIBLE_HOST_KEY_CHECKING=False \
+                                \${DOCKER_IMAGE} \
+                                ansible-playbook \
+                                    -i /automation/ansible/inventory/hosts.ini \
+                                    /automation/ansible/playbooks/${action}.yml \
+                                    -e employee_file=/automation/${EMPLOYEE_FILE} \
+                                    -v
+                        """
+                    }
                 }
             }
         }
 
         stage('Run Tests') {
             steps {
-                // Only run tests if tests exist
                 script {
                     sh """
                         if [ -d tests ]; then
                             python3 -m pytest tests/ -v --junitxml=test-results.xml
                         else
-                            echo 'No tests directory, skipping pytest.'
+                            echo 'No tests directory, skipping.'
                         fi
                     """
                 }
